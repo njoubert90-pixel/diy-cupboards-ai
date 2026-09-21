@@ -1,0 +1,655 @@
+import { useMemo, useState } from "react";
+import { createQuote, getQuote } from "./api";
+import { calculateCabinet, cabinetLibrary } from "./cabinetCalculator";
+import "./App.css";
+
+const HARDWARE_OPTIONS = [
+  { key: "HANDLE", label: "Handles" },
+  { key: "HINGE", label: "Hinges" },
+  { key: "RUNNER", label: "Runners" },
+  { key: "LEG", label: "Legs" },
+  { key: "SHELF_PIN", label: "Shelf Pins" },
+  { key: "SCREW_BOX", label: "Screw Boxes" },
+];
+
+function emptyCabinetRow() {
+  return {
+    cabinetKey: "BASE600",
+    qty: 1,
+  };
+}
+
+function emptyHardwareRow() {
+  return {
+    hardwareKey: "HANDLE",
+    qty: 1,
+  };
+}
+
+function normalizeText(value) {
+  return String(value || "").trim();
+}
+
+function normalizeNumber(value) {
+  return Number(value) || 0;
+}
+
+function mergeCuttingItems(items = []) {
+  const map = new Map();
+
+  for (const item of items) {
+    const part = normalizeText(item.part || "Part");
+    const cabinet = normalizeText(item.cabinet || "");
+    const material = normalizeText(item.material || "16mm board");
+    const height = normalizeNumber(item.height);
+    const width = normalizeNumber(item.width);
+    const qty = normalizeNumber(item.qty || 1);
+
+    const key = [part, cabinet, material, height, width].join("|");
+
+    if (!map.has(key)) {
+      map.set(key, {
+        part,
+        cabinet,
+        material,
+        height,
+        width,
+        qty,
+      });
+    } else {
+      map.get(key).qty += qty;
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => {
+    if (a.cabinet !== b.cabinet) return a.cabinet.localeCompare(b.cabinet);
+    if (a.part !== b.part) return a.part.localeCompare(b.part);
+    if (a.height !== b.height) return b.height - a.height;
+    return b.width - a.width;
+  });
+}
+
+function CuttingListDisplay({ cuttingList }) {
+  if (!Array.isArray(cuttingList) || cuttingList.length === 0) {
+    return <div className="cutting-empty">No cutting list generated yet.</div>;
+  }
+
+  const merged = mergeCuttingItems(cuttingList);
+  const carcass = merged.filter((item) => item.part.toLowerCase() !== "back");
+  const backs = merged.filter((item) => item.part.toLowerCase() === "back");
+  const totalQty = merged.reduce((sum, item) => sum + item.qty, 0);
+
+  function renderTable(title, items) {
+    if (!items.length) return null;
+
+    return (
+      <div className="cutting-block">
+        <div className="cutting-block-header">
+          <h3>{title}</h3>
+          <span>{items.length} lines</span>
+        </div>
+
+        <div className="cutting-table-wrap">
+          <table className="cutting-table">
+            <thead>
+              <tr>
+                <th>Part</th>
+                <th>Cabinet</th>
+                <th>Material</th>
+                <th>H</th>
+                <th>W</th>
+                <th>Qty</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item, index) => (
+                <tr key={`${title}-${index}`}>
+                  <td>{item.part}</td>
+                  <td>{item.cabinet || "-"}</td>
+                  <td>{item.material}</td>
+                  <td>{item.height}</td>
+                  <td>{item.width}</td>
+                  <td>{item.qty}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="cutting-sheet">
+      <div className="cutting-top-summary">
+        <div>
+          <strong>Raw items:</strong> {cuttingList.length}
+        </div>
+        <div>
+          <strong>Merged lines:</strong> {merged.length}
+        </div>
+        <div>
+          <strong>Total qty:</strong> {totalQty}
+        </div>
+      </div>
+
+      {renderTable("Carcass Parts", carcass)}
+      {renderTable("Backs", backs)}
+    </div>
+  );
+}
+
+export default function App() {
+  const [customerName, setCustomerName] = useState("");
+  const [customerEmail, setCustomerEmail] = useState("");
+  const [quote, setQuote] = useState(null);
+  const [lookupId, setLookupId] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const [cabinetRows, setCabinetRows] = useState([
+    { cabinetKey: "BASE600", qty: 1 },
+    { cabinetKey: "WALL600", qty: 1 },
+  ]);
+
+  const [hardwareRows, setHardwareRows] = useState([
+    { hardwareKey: "HANDLE", qty: 2 },
+  ]);
+
+  const [layoutWidth, setLayoutWidth] = useState("");
+  const [leftFiller, setLeftFiller] = useState("");
+  const [rightFiller, setRightFiller] = useState("");
+
+  function addCabinetRow() {
+    setCabinetRows((prev) => [...prev, emptyCabinetRow()]);
+  }
+
+  function removeCabinetRow(index) {
+    setCabinetRows((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function updateCabinetRow(index, field, value) {
+    setCabinetRows((prev) =>
+      prev.map((row, i) => (i === index ? { ...row, [field]: value } : row))
+    );
+  }
+
+  function addHardwareRow() {
+    setHardwareRows((prev) => [...prev, emptyHardwareRow()]);
+  }
+
+  function removeHardwareRow(index) {
+    setHardwareRows((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function updateHardwareRow(index, field, value) {
+    setHardwareRows((prev) =>
+      prev.map((row, i) => (i === index ? { ...row, [field]: value } : row))
+    );
+  }
+
+  const cabinetResults = useMemo(() => {
+    return cabinetRows
+      .filter((row) => row.cabinetKey && Number(row.qty) > 0)
+      .map((row) => {
+        const result = calculateCabinet(row.cabinetKey, Number(row.qty));
+        return {
+          ...row,
+          ...result,
+        };
+      });
+  }, [cabinetRows]);
+
+  const generatedCuttingList = useMemo(() => {
+    return cabinetRows.flatMap((row) => {
+      if (!row.cabinetKey || Number(row.qty) <= 0) return [];
+      const result = calculateCabinet(row.cabinetKey, Number(row.qty));
+      return Array.isArray(result.cuttingList) ? result.cuttingList : [];
+    });
+  }, [cabinetRows]);
+
+  const totalCabinetRun = useMemo(() => {
+    return cabinetRows.reduce((sum, row) => {
+      const lib = cabinetLibrary[row.cabinetKey];
+      const qty = Number(row.qty) || 0;
+      return sum + (lib?.width || 0) * qty;
+    }, 0);
+  }, [cabinetRows]);
+
+  const safeLeftFiller = Math.max(0, Math.min(Number(leftFiller) || 0, 150));
+  const safeRightFiller = Math.max(0, Math.min(Number(rightFiller) || 0, 150));
+  const totalRunWithFillers = totalCabinetRun + safeLeftFiller + safeRightFiller;
+
+  const remainingSpace = useMemo(() => {
+    const width = Number(layoutWidth) || 0;
+    if (!width) return 0;
+    return width - totalRunWithFillers;
+  }, [layoutWidth, totalRunWithFillers]);
+
+  const fillerWarning =
+    (Number(leftFiller) || 0) > 150 ||
+    (Number(rightFiller) || 0) > 150 ||
+    (Number(leftFiller) || 0) < 0 ||
+    (Number(rightFiller) || 0) < 0;
+
+  async function handleCreateQuote() {
+    setBusy(true);
+    setError("");
+
+    try {
+      const payload = {
+        customer_name: customerName,
+        customer_email: customerEmail,
+        cabinets: cabinetRows
+          .filter((row) => row.cabinetKey && Number(row.qty) > 0)
+          .map((row) => ({
+            cabinet_key: row.cabinetKey,
+            qty: Number(row.qty),
+          })),
+        hardware: hardwareRows
+          .filter((row) => row.hardwareKey && Number(row.qty) > 0)
+          .map((row) => ({
+            hardware_key: row.hardwareKey,
+            qty: Number(row.qty),
+          })),
+        layout: {
+          room_width: Number(layoutWidth) || 0,
+          left_filler: safeLeftFiller,
+          right_filler: safeRightFiller,
+          cabinet_run: totalCabinetRun,
+          total_run_with_fillers: totalRunWithFillers,
+          remaining_space: remainingSpace,
+        },
+      };
+
+      const created = await createQuote(payload);
+      setQuote(created);
+    } catch (err) {
+      setError(err.message || "Failed to create quote");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleLookupQuote(idOverride) {
+    setBusy(true);
+    setError("");
+
+    try {
+      const id = idOverride || lookupId;
+      const found = await getQuote(id);
+      setQuote(found);
+
+      setCustomerName(found.customer_name || "");
+      setCustomerEmail(found.customer_email || "");
+
+      setCabinetRows(
+        Array.isArray(found.cabinets) && found.cabinets.length > 0
+          ? found.cabinets.map((row) => ({
+              cabinetKey: row.cabinet_key || row.cabinetKey || "BASE600",
+              qty: Number(row.qty) || 1,
+            }))
+          : [emptyCabinetRow()]
+      );
+
+      setHardwareRows(
+        Array.isArray(found.hardware) && found.hardware.length > 0
+          ? found.hardware.map((row) => ({
+              hardwareKey: row.hardware_key || row.hardwareKey || "HANDLE",
+              qty: Number(row.qty) || 1,
+            }))
+          : [emptyHardwareRow()]
+      );
+
+      if (found.layout) {
+        setLayoutWidth(String(found.layout.room_width || ""));
+        setLeftFiller(String(found.layout.left_filler || ""));
+        setRightFiller(String(found.layout.right_filler || ""));
+      } else {
+        setLayoutWidth("");
+        setLeftFiller("");
+        setRightFiller("");
+      }
+
+      setLookupId(String(found.id || found.quote_id || id || ""));
+    } catch (err) {
+      setError(err.message || "Failed to load quote");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handlePrevQuote() {
+    const currentId = Number(quote?.id || quote?.quote_id || lookupId);
+
+    if (!currentId || currentId <= 1) {
+      setError("No previous quote available");
+      return;
+    }
+
+    const prevId = currentId - 1;
+    setLookupId(String(prevId));
+    handleLookupQuote(prevId);
+  }
+
+  function handleNextQuote() {
+    const currentId = Number(quote?.id || quote?.quote_id || lookupId);
+
+    if (!currentId) {
+      setError("Load a quote first");
+      return;
+    }
+
+    const nextId = currentId + 1;
+    setLookupId(String(nextId));
+    handleLookupQuote(nextId);
+  }
+
+  return (
+    <div className="app-shell">
+      <div className="page-header">
+        <h1>DIY Cupboards Quote Builder</h1>
+        <p>Build cabinet layouts, add hardware, and generate a quote.</p>
+      </div>
+
+      {error && <div className="error-banner">{error}</div>}
+
+      <div className="grid-layout">
+        <section className="card">
+          <h2>Customer Details</h2>
+
+          <div className="form-grid">
+            <label>
+              Customer Name
+              <input
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+                placeholder="Customer name"
+              />
+            </label>
+
+            <label>
+              Customer Email
+              <input
+                value={customerEmail}
+                onChange={(e) => setCustomerEmail(e.target.value)}
+                placeholder="customer@email.com"
+              />
+            </label>
+          </div>
+        </section>
+
+        <section className="card">
+          <h2>Cabinets</h2>
+
+          <div className="rows-wrap">
+            {cabinetRows.map((row, index) => {
+              const lib = cabinetLibrary[row.cabinetKey];
+              return (
+                <div className="row-card" key={index}>
+                  <label>
+                    Cabinet
+                    <select
+                      value={row.cabinetKey}
+                      onChange={(e) =>
+                        updateCabinetRow(index, "cabinetKey", e.target.value)
+                      }
+                    >
+                      {Object.entries(cabinetLibrary).map(([key, item]) => (
+                        <option key={key} value={key}>
+                          {key} - {item.label} ({item.width}mm)
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    Qty
+                    <input
+                      type="number"
+                      min="1"
+                      value={row.qty}
+                      onChange={(e) =>
+                        updateCabinetRow(index, "qty", e.target.value)
+                      }
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    className="danger-btn"
+                    onClick={() => removeCabinetRow(index)}
+                    disabled={cabinetRows.length === 1}
+                  >
+                    Remove
+                  </button>
+
+                  {lib && (
+                    <div className="mini-note">
+                      Width: {lib.width}mm | Height: {lib.height}mm | Depth: {lib.depth}mm
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <button type="button" className="secondary-btn" onClick={addCabinetRow}>
+            + Add Cabinet
+          </button>
+        </section>
+
+        <section className="card">
+          <h2>Hardware</h2>
+
+          <div className="rows-wrap">
+            {hardwareRows.map((row, index) => (
+              <div className="row-card" key={index}>
+                <label>
+                  Hardware
+                  <select
+                    value={row.hardwareKey}
+                    onChange={(e) =>
+                      updateHardwareRow(index, "hardwareKey", e.target.value)
+                    }
+                  >
+                    {HARDWARE_OPTIONS.map((item) => (
+                      <option key={item.key} value={item.key}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Qty
+                  <input
+                    type="number"
+                    min="1"
+                    value={row.qty}
+                    onChange={(e) =>
+                      updateHardwareRow(index, "qty", e.target.value)
+                    }
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  className="danger-btn"
+                  onClick={() => removeHardwareRow(index)}
+                  disabled={hardwareRows.length === 1}
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <button type="button" className="secondary-btn" onClick={addHardwareRow}>
+            + Add Hardware
+          </button>
+        </section>
+
+        <section className="card">
+          <h2>Layout & Fillers</h2>
+
+          <div className="form-grid">
+            <label>
+              Total Wall / Run Width (mm)
+              <input
+                type="number"
+                value={layoutWidth}
+                onChange={(e) => setLayoutWidth(e.target.value)}
+                placeholder="e.g. 3200"
+              />
+            </label>
+
+            <label>
+              Left Filler (max 150mm)
+              <input
+                type="number"
+                value={leftFiller}
+                onChange={(e) => setLeftFiller(e.target.value)}
+                placeholder="0"
+              />
+            </label>
+
+            <label>
+              Right Filler (max 150mm)
+              <input
+                type="number"
+                value={rightFiller}
+                onChange={(e) => setRightFiller(e.target.value)}
+                placeholder="0"
+              />
+            </label>
+          </div>
+
+          {fillerWarning && (
+            <div className="warning-banner">
+              Fillers must be between 0mm and 150mm each.
+            </div>
+          )}
+
+          <div className="summary-box">
+            <p>
+              <strong>Cabinet run:</strong> {totalCabinetRun}mm
+            </p>
+            <p>
+              <strong>Fillers used:</strong> {safeLeftFiller}mm left + {safeRightFiller}mm right
+            </p>
+            <p>
+              <strong>Total run with fillers:</strong> {totalRunWithFillers}mm
+            </p>
+            <p>
+              <strong>Remaining space:</strong> {remainingSpace}mm
+            </p>
+          </div>
+        </section>
+
+        <section className="card">
+          <h2>Actions</h2>
+
+          <div className="button-row">
+            <button type="button" onClick={handleCreateQuote} disabled={busy}>
+              {busy ? "Working..." : "Create Quote"}
+            </button>
+          </div>
+
+          <div className="lookup-box">
+            <label>
+              Lookup Quote ID
+              <input
+                value={lookupId}
+                onChange={(e) => setLookupId(e.target.value)}
+                placeholder="Enter quote ID"
+              />
+            </label>
+
+            <div className="button-row">
+              <button type="button" onClick={() => handleLookupQuote()} disabled={busy}>
+                Load Quote
+              </button>
+
+              <button type="button" onClick={handlePrevQuote} disabled={busy}>
+                Prev
+              </button>
+
+              <button type="button" onClick={handleNextQuote} disabled={busy}>
+                Next
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section className="card">
+        <h2>Cabinet Breakdown</h2>
+
+        <div className="results-grid">
+          {cabinetResults.map((item, index) => (
+            <div className="result-card" key={index}>
+              <h3>
+                {item.cabinetKey} × {item.qty}
+              </h3>
+              <p>{item.label}</p>
+              <p>
+                <strong>Board area:</strong> {item.totalBoardArea?.toFixed?.(2) ?? "0.00"} m²
+              </p>
+              <p>
+                <strong>Edging:</strong> {item.totalEdging?.toFixed?.(2) ?? "0.00"} m
+              </p>
+              <p>
+                <strong>Backs:</strong> {item.totalBackArea?.toFixed?.(2) ?? "0.00"} m²
+              </p>
+              <p>
+                <strong>Doors/Fronts:</strong> {item.totalFrontArea?.toFixed?.(2) ?? "0.00"} m²
+              </p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>Cutting List</h2>
+        <CuttingListDisplay cuttingList={quote?.cutting_list || generatedCuttingList} />
+      </section>
+
+      {quote && (
+        <section className="card">
+          <h2>Quote Result</h2>
+
+          <div className="summary-box">
+            <p>
+              <strong>Quote ID:</strong> {quote.id || quote.quote_id || "-"}
+            </p>
+            <p>
+              <strong>Customer:</strong> {quote.customer_name || customerName || "-"}
+            </p>
+            <p>
+              <strong>Email:</strong> {quote.customer_email || customerEmail || "-"}
+            </p>
+            <p>
+              <strong>Cabinets:</strong> {quote.cabinets?.length || cabinetRows.length}
+            </p>
+            <p>
+              <strong>Hardware:</strong> {quote.hardware?.length || hardwareRows.length}
+            </p>
+            <p>
+              <strong>Room width:</strong> {quote.layout?.room_width || 0} mm
+            </p>
+            <p>
+              <strong>Cabinet run:</strong> {quote.layout?.cabinet_run || 0} mm
+            </p>
+            <p>
+              <strong>Total with fillers:</strong> {quote.layout?.total_run_with_fillers || 0} mm
+            </p>
+            <p>
+              <strong>Remaining space:</strong> {quote.layout?.remaining_space || 0} mm
+            </p>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
