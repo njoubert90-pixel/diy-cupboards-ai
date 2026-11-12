@@ -31,6 +31,31 @@ function addBox(parent, dimensions, position, material, castShadow = true) {
   return mesh;
 }
 
+function addCornerShape(parent, width, depth, armDepth, thickness, position, material) {
+  const shape = new THREE.Shape();
+  shape.moveTo(0, 0);
+  shape.lineTo(width, 0);
+  shape.lineTo(width, depth);
+  shape.lineTo(armDepth, depth);
+  shape.lineTo(armDepth, armDepth);
+  shape.lineTo(0, armDepth);
+  shape.closePath();
+
+  const geometry = new THREE.ExtrudeGeometry(shape, {
+    depth: thickness,
+    bevelEnabled: false,
+    steps: 1,
+  });
+  geometry.rotateX(Math.PI / 2);
+  geometry.translate(...position);
+
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  parent.add(mesh);
+  return mesh;
+}
+
 function createCabinet(unit, roomHeightMeters, worktop) {
   const type = unit.spec.type || "base";
   const width = Math.max(0.15, Number(unit.width) || Number(unit.spec.width) || 600) * MM_TO_METERS;
@@ -59,32 +84,115 @@ function createCabinet(unit, roomHeightMeters, worktop) {
   const darkMaterial = new THREE.MeshStandardMaterial({ color: "#22282d", roughness: 0.28 });
   const metalMaterial = new THREE.MeshStandardMaterial({ color: "#7c858b", metalness: 0.72, roughness: 0.28 });
   const handleMaterial = new THREE.MeshStandardMaterial({ color: "#343a3e", metalness: 0.58, roughness: 0.32 });
+  const special = String(unit.spec.special || "").toLowerCase();
+  const isCorner = special.includes("corner");
+  const armDepth = Math.min(width, depth) * 0.3;
   const frontZ = z + depth + 0.012;
 
-  addBox(
-    group,
-    [width, bodyHeight, depth],
-    [centerX, cabinetBottom + bodyHeight / 2, centerZ],
-    carcassMaterial,
-  );
-
-  if (toeKick > 0) {
+  if (isCorner) {
+    addCornerShape(
+      group,
+      width,
+      depth,
+      armDepth,
+      bodyHeight,
+      [x, cabinetBottom + bodyHeight, z],
+      carcassMaterial,
+    );
+  } else {
     addBox(
       group,
-      [Math.max(0.08, width - 0.025), toeKick * 0.72, 0.025],
-      [centerX, toeKick * 0.38, z + depth + 0.006],
-      handleMaterial,
+      [width, bodyHeight, depth],
+      [centerX, cabinetBottom + bodyHeight / 2, centerZ],
+      carcassMaterial,
     );
   }
 
-  const special = String(unit.spec.special || "").toLowerCase();
+  if (toeKick > 0) {
+    if (isCorner) {
+      addBox(
+        group,
+        [Math.max(0.08, armDepth - 0.025), toeKick * 0.72, 0.025],
+        [x + armDepth / 2, toeKick * 0.38, z + armDepth + 0.006],
+        handleMaterial,
+      );
+      const sideToeKick = addBox(
+        group,
+        [Math.max(0.08, depth - armDepth - 0.025), toeKick * 0.72, 0.025],
+        [z + (depth + armDepth) / 2, toeKick * 0.38, x + armDepth - 0.006],
+        handleMaterial,
+      );
+      sideToeKick.rotation.y = Math.PI / 2;
+    } else {
+      addBox(
+        group,
+        [Math.max(0.08, width - 0.025), toeKick * 0.72, 0.025],
+        [centerX, toeKick * 0.38, z + depth + 0.006],
+        handleMaterial,
+      );
+    }
+  }
+
   const doorCount = Math.max(0, Number(unit.doors) || Number(unit.spec.doors) || 0);
   const drawerCount = Math.max(0, Number(unit.drawers) || Number(unit.spec.drawers) || 0);
   const frontHeight = bodyHeight * 0.94;
   const frontY = cabinetBottom + bodyHeight / 2;
   const frontWidth = Math.max(0.08, width - 0.022);
 
-  if (special.includes("fridge")) {
+  if (isCorner) {
+    const panelThickness = 0.025;
+    const panelHeight = frontHeight;
+    const panelInset = 0.012;
+
+    addBox(
+      group,
+      [Math.max(0.08, armDepth - 0.022), panelHeight, panelThickness],
+      [x + armDepth / 2, frontY, z + armDepth + panelInset],
+      doorMaterial,
+    );
+
+    const sidePanel = addBox(
+      group,
+      [Math.max(0.08, depth - armDepth - 0.022), panelHeight, panelThickness],
+      [z + (depth + armDepth) / 2, frontY, x + armDepth - panelInset],
+      doorMaterial,
+    );
+    sidePanel.rotation.y = Math.PI / 2;
+
+    const frontHandle = addBox(
+      group,
+      [0.012, Math.min(0.14, panelHeight * 0.2), 0.018],
+      [x + armDepth * 0.76, frontY, z + armDepth + panelInset + 0.022],
+      handleMaterial,
+    );
+    const sideHandle = addBox(
+      group,
+      [0.012, Math.min(0.14, panelHeight * 0.2), 0.018],
+      [z + (depth + armDepth) / 2, frontY, x + armDepth - panelInset - 0.022],
+      handleMaterial,
+    );
+    frontHandle.rotation.z = Math.PI / 2;
+    sideHandle.rotation.y = Math.PI / 2;
+    sideHandle.rotation.z = Math.PI / 2;
+
+    const shelfCount = Math.max(0, Number(unit.shelves) || Number(unit.spec.shelves) || 0);
+    for (let index = 1; index <= shelfCount; index += 1) {
+      const shelfMaterial = carcassMaterial.clone();
+      addCornerShape(
+        group,
+        Math.max(0.08, width - 0.04),
+        Math.max(0.08, depth - 0.04),
+        Math.max(0.06, armDepth - 0.02),
+        0.018,
+        [
+          x + 0.02,
+          cabinetBottom + (bodyHeight * index) / (shelfCount + 1) + 0.009,
+          z + 0.02,
+        ],
+        shelfMaterial,
+      );
+    }
+  } else if (special.includes("fridge")) {
     addBox(group, [frontWidth, frontHeight, 0.025], [centerX, frontY, frontZ], darkMaterial);
     addBox(
       group,
@@ -161,12 +269,24 @@ function createCabinet(unit, roomHeightMeters, worktop) {
       color: getFinishColor(worktop.type),
       roughness: String(worktop.type || "").toLowerCase().includes("granite") ? 0.3 : 0.48,
     });
-    addBox(
-      group,
-      [width + 0.025, 0.04, depth + 0.06],
-      [centerX, height + 0.02, centerZ - 0.01],
-      worktopMaterial,
-    );
+    if (isCorner) {
+      addCornerShape(
+        group,
+        width + 0.025,
+        depth + 0.06,
+        armDepth + 0.0125,
+        0.04,
+        [x - 0.0125, height + 0.04, z - 0.02],
+        worktopMaterial,
+      );
+    } else {
+      addBox(
+        group,
+        [width + 0.025, 0.04, depth + 0.06],
+        [centerX, height + 0.02, centerZ - 0.01],
+        worktopMaterial,
+      );
+    }
   }
 
   return group;
@@ -205,28 +325,41 @@ export default function CabinetScene3D({
     errorUpdateTimer = window.setTimeout(() => setRendererError(""), 0);
     const scene = new THREE.Scene();
     scene.background = new THREE.Color("#e8edf2");
-    scene.add(new THREE.HemisphereLight("#ffffff", "#858078", 2.1));
+    scene.add(new THREE.HemisphereLight("#ffffff", "#858078", 1.4));
 
     const roomHeight = Math.max(1800, Number(roomHeightMm) || 2700) * MM_TO_METERS;
     const preparedUnits = units.map((unit) => ({
       ...unit,
       spec: unit.spec || {},
     }));
-    const cabinetBounds = preparedUnits.map((unit) => ({
-      right: Math.max(0, Number(unit.x) || 0) / PLAN_PIXELS_PER_MM
-        + (Number(unit.width) || Number(unit.spec.width) || 600),
-      far: Math.max(0, Number(unit.y) || 0) / PLAN_PIXELS_PER_MM
-        + (Number(unit.depth) || Number(unit.spec.depth) || 570),
-    }));
+    const cabinetBounds = preparedUnits.map((unit) => {
+      const width = Number(unit.width) || Number(unit.spec.width) || 600;
+      const depth = Number(unit.depth) || Number(unit.spec.depth) || 570;
+      const height = Number(unit.height) || Number(unit.spec.height) || 720;
+      const bottom = unit.spec.type === "wall" ? Math.max(0.1, roomHeight - height * MM_TO_METERS - 0.6) : 0;
+      const left = Math.max(0, Number(unit.x) || 0) / PLAN_PIXELS_PER_MM * MM_TO_METERS;
+      const near = Math.max(0, Number(unit.y) || 0) / PLAN_PIXELS_PER_MM * MM_TO_METERS;
+      const widthMeters = width * MM_TO_METERS;
+      const depthMeters = depth * MM_TO_METERS;
+      const heightMeters = height * MM_TO_METERS;
+      return {
+        left,
+        right: left + widthMeters,
+        near,
+        far: near + depthMeters,
+        bottom,
+        top: bottom + heightMeters,
+      };
+    });
     const roomWidth = Math.max(
       2400,
       Number(roomWidthMm) || 3600,
-      ...cabinetBounds.map((bounds) => bounds.right + 200),
+      ...cabinetBounds.map((bounds) => bounds.right / MM_TO_METERS + 200),
     ) * MM_TO_METERS;
     const roomDepth = Math.max(
       2000,
       Number(roomDepthMm) || 3000,
-      ...cabinetBounds.map((bounds) => bounds.far + 200),
+      ...cabinetBounds.map((bounds) => bounds.far / MM_TO_METERS + 200),
     ) * MM_TO_METERS;
     const longestSide = Math.max(roomWidth, roomDepth, roomHeight);
 
@@ -242,7 +375,7 @@ export default function CabinetScene3D({
     grid.position.set(roomWidth / 2, 0.002, roomDepth / 2);
     scene.add(grid);
 
-    const keyLight = new THREE.DirectionalLight("#fff5df", 3.2);
+    const keyLight = new THREE.DirectionalLight("#fff5df", 2.2);
     keyLight.position.set(roomWidth * 0.7, roomHeight * 1.25, roomDepth * 0.8);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.set(1024, 1024);
@@ -254,20 +387,39 @@ export default function CabinetScene3D({
 
     const aspect = Math.max(1, mount.clientWidth) / Math.max(1, mount.clientHeight);
     const camera = new THREE.PerspectiveCamera(42, aspect, 0.01, longestSide * 30);
-    const target = new THREE.Vector3(roomWidth / 2, Math.min(roomHeight * 0.44, 1.5), roomDepth / 2);
+    const hasCabinets = cabinetBounds.length > 0;
+    const contentBounds = hasCabinets
+      ? {
+          left: Math.min(...cabinetBounds.map((bounds) => bounds.left)),
+          right: Math.max(...cabinetBounds.map((bounds) => bounds.right)),
+          near: Math.min(...cabinetBounds.map((bounds) => bounds.near)),
+          far: Math.max(...cabinetBounds.map((bounds) => bounds.far)),
+          bottom: Math.min(...cabinetBounds.map((bounds) => bounds.bottom)),
+          top: Math.max(...cabinetBounds.map((bounds) => bounds.top)),
+        }
+      : { left: 0, right: roomWidth, near: 0, far: roomDepth, bottom: 0, top: roomHeight };
+    const contentWidth = contentBounds.right - contentBounds.left;
+    const contentDepth = contentBounds.far - contentBounds.near;
+    const contentHeight = contentBounds.top - contentBounds.bottom;
+    const viewExtent = Math.max(contentWidth, contentDepth, contentHeight, 1.2);
+    const target = new THREE.Vector3(
+      (contentBounds.left + contentBounds.right) / 2,
+      contentBounds.bottom + contentHeight * 0.55,
+      (contentBounds.near + contentBounds.far) / 2,
+    );
     camera.position.set(
-      target.x + longestSide * 1.05,
-      target.y + longestSide * 0.72,
-      target.z + longestSide * 1.25,
+      target.x + viewExtent * 1.75,
+      target.y + viewExtent * 1.15,
+      target.z + viewExtent * 2.1,
     );
 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(Math.max(1, mount.clientWidth), Math.max(1, mount.clientHeight));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.15;
+    renderer.toneMappingExposure = 1.05;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.domElement.className = "cabinet-scene-canvas";
     renderer.domElement.setAttribute("aria-label", "Interactive 3D room and cabinet preview");
     mount.appendChild(renderer.domElement);
@@ -276,7 +428,7 @@ export default function CabinetScene3D({
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
     controls.maxPolarAngle = Math.PI / 2 - 0.03;
-    controls.minDistance = Math.max(0.8, longestSide * 0.2);
+    controls.minDistance = Math.max(0.4, viewExtent * 0.5);
     controls.maxDistance = longestSide * 5;
     controls.target.copy(target);
     if (viewStateRef.current) {

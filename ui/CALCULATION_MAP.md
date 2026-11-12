@@ -58,6 +58,11 @@ This document maps the existing working calculation and persistence flow that mu
   - `handleCreateQuote()`
   - `handleLookupQuote(...)`
 
+### 3D cabinet preview
+- File: `src/CabinetScene3D.jsx`
+- Responsibility: Render the room and cabinet geometry from the existing unit dimensions, cabinet specifications, and selected finishes.
+- Corner cabinets retain an L-shaped footprint in the 3D preview; this visual layer does not change layout, cutting-list, or pricing calculations.
+
 ## 3) API Layer (No Business Logic Duplication)
 
 ### API wrapper
