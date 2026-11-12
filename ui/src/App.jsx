@@ -9,6 +9,7 @@ import {
   saveProjectLayout,
   saveRoomSpec,
 } from "./api";
+import CabinetScene3D, { PLAN_PIXELS_PER_MM } from "./CabinetScene3D";
 import { calculateCabinet, cabinetLibrary } from "./cabinetCalculator";
 import "./index.css";
 import "./App.css";
@@ -70,7 +71,7 @@ const APPLIANCE_LIBRARY = [
 ];
 
 const VAT_RATE = 0.15;
-const PX_PER_MM = 0.18;
+const PX_PER_MM = PLAN_PIXELS_PER_MM;
 const MIN_WIDTH_MM = 200;
 const MIN_HEIGHT_MM = 300;
 const STATE_NOTE_PREFIX = "STATE::";
@@ -246,6 +247,12 @@ export default function App() {
   const roomWidth = Number(projectDraft.roomLength) || 0;
   const roomDepth = Number(projectDraft.roomWidth) || 0;
   const roomHeight = Number(projectDraft.roomHeight) || 0;
+  const sortedUnits = useMemo(
+    () => [...units]
+      .sort((a, b) => (Number(a.y || 0) - Number(b.y || 0)) || (Number(a.x || 0) - Number(b.x || 0)))
+      .map((unit) => ({ ...unit, spec: cabinetLibrary[unit.cabinetKey] || {} })),
+    [units]
+  );
 
   const cuttingRows = useMemo(() => aggregateCutting(units), [units]);
   const hardwareRows = useMemo(() => aggregateHardware(units), [units]);
@@ -1028,12 +1035,6 @@ export default function App() {
   }
 
   function renderWorkspace() {
-    const sortedUnits = [...units].sort((a, b) => {
-      const yDiff = Number(a.y || 0) - Number(b.y || 0);
-      if (yDiff !== 0) return yDiff;
-      return Number(a.x || 0) - Number(b.x || 0);
-    });
-
     const baseUnits = sortedUnits.filter((unit) => (cabinetLibrary[unit.cabinetKey]?.type || "base") === "base");
     const wallUnits = sortedUnits.filter((unit) => (cabinetLibrary[unit.cabinetKey]?.type || "base") === "wall");
     const tallUnits = sortedUnits.filter((unit) => (cabinetLibrary[unit.cabinetKey]?.type || "base") === "tall");
@@ -1194,58 +1195,16 @@ export default function App() {
       }
 
       if (activeView === "3D VIEW") {
-        const minX = sortedUnits.length > 0 ? Math.min(...sortedUnits.map((unit) => Number(unit.x) || 0)) : 0;
-        const maxCabinetHeight = Math.max(1, ...sortedUnits.map((unit) => Number(unit.height) || 720));
-        const sceneScale = 0.115;
-
         return (
-          <div className="iso-surface">
-            <div className="iso-room">
-              <div className="iso-back-wall" />
-              <div className="iso-side-wall" />
-              <div className="iso-floor-plane" />
-              <div className="iso-worktop-plane" />
-              {sortedUnits.map((unit) => {
-                const spec = cabinetLibrary[unit.cabinetKey] || {};
-                const type = spec.type || "base";
-                const widthPx = Math.max(48, Math.round(Number(unit.width) * sceneScale));
-                const heightPx = Math.max(type === "tall" ? 180 : 70, Math.round(Number(unit.height) * 0.105));
-                const depthPx = Math.max(20, Math.round(Number(unit.depth) * 0.055));
-                const sourceX = Number(unit.x) || 0;
-                const sourceY = Number(unit.y) || 0;
-                const left = 95 + (sourceX - minX) * 0.42 + sourceY * 0.1;
-                const floorBottom = 72 + sourceY * 0.08;
-                const bottom = type === "wall"
-                  ? floorBottom + Math.max(120, (maxCabinetHeight - Number(unit.height || 720)) * 0.025 + 110)
-                  : floorBottom;
-
-                return (
-                  <button
-                    key={unit.id}
-                    type="button"
-                    className={`iso-cabinet ${type} ${finishClass(unit.materials?.doors)} ${selectedId === unit.id ? "selected" : ""}`}
-                    style={{
-                      left: `${left}px`,
-                      bottom: `${bottom}px`,
-                      width: `${widthPx}px`,
-                      height: `${heightPx}px`,
-                      zIndex: Math.max(2, 1000 - Math.round(sourceY)),
-                      "--iso-depth": `${depthPx}px`,
-                      "--iso-rise": `${Math.round(depthPx * 0.52)}px`,
-                    }}
-                    onClick={() => setSelectedId(unit.id)}
-                    title={`${spec.label || unit.cabinetKey} ${unit.width}×${unit.height}×${unit.depth}`}
-                  >
-                    <span className="iso-cabinet-front">{renderFrontDetails(unit, true)}</span>
-                    <span className="iso-cabinet-top" />
-                    <span className="iso-cabinet-side" />
-                    <span className="iso-cabinet-label">{spec.label || unit.cabinetKey}</span>
-                  </button>
-                );
-              })}
-              {sortedUnits.length === 0 && <p className="iso-empty panel-note">Add cabinets to see the 3D view.</p>}
-            </div>
-          </div>
+          <CabinetScene3D
+            units={sortedUnits}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            roomWidthMm={roomWidth}
+            roomDepthMm={roomDepth}
+            roomHeightMm={roomHeight}
+            worktop={worktop}
+          />
         );
       }
 
